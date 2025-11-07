@@ -8,7 +8,7 @@ namespace UtilityApi.Endpoints
         public static void MapErrorRecordEndpoints(this WebApplication app, string connString)
         {
             // ✅ GET specific columns from ErrorRecords
-            app.MapGet("/MissingTabledata", async (string? tableName) =>
+            app.MapGet("/ErrorDetails", async (string? tableName) =>
             {
                 using var connection = new SqlConnection(connString);
                 await connection.OpenAsync();
@@ -36,9 +36,8 @@ namespace UtilityApi.Endpoints
                 var allErrors = await connection.QueryAsync(query);
                 return Results.Ok(allErrors);
             })
-            .WithTags("Error Records")
-            .WithSummary("Get missing or invalid data from Exel")
-            .WithDescription("Returns specific columns (TableName, RowNumber, RecordIdentifier, ErrorMessage, etc.) from ErrorRecords table, optionally filtered by TableName.");
+            .WithTags("Error Details")
+            .WithSummary("Get missing  data from Exel");
         }
     }
 }
