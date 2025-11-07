@@ -168,7 +168,9 @@ namespace UtilityApi.Endpoints
             })
             .DisableAntiforgery()
             .Accepts<IFormFile>("multipart/form-data")
-            .WithTags("Excel Upload");
+            .WithTags("Excel Upload")
+            .WithSummary("Upload Exele Data Into Database");
+
         }
 
         // ✅ Helper: Find Excel sheet
