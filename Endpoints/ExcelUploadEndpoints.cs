@@ -72,7 +72,6 @@ namespace UtilityApi.Endpoints
                         }
                     }
 
-                    // ✅ Log to DB if any errors
                     if (tableErrors.Any())
                         await LogError(connection, fileName, currentTable, tableErrors);
                     allErrors.AddRange(tableErrors);
@@ -217,24 +216,44 @@ namespace UtilityApi.Endpoints
             .WithSummary("Upload Excel Data Into Database");
         }
 
-        // ✅ Helper: Insert error record
+        // ✅ Enhanced LogError: Update if exists, else insert
         private static async Task LogError(SqlConnection connection, string fileName, string tableName, List<object> tableErrors)
         {
             string errorJson = JsonSerializer.Serialize(tableErrors);
 
-            var errorRecord = new ErrorRecord
+            var existingRecord = await connection.QuerySingleOrDefaultAsync<ErrorRecord>(
+                "SELECT * FROM ErrorRecords WHERE FileName = @FileName AND TableName = @TableName",
+                new { FileName = fileName, TableName = tableName });
+
+            if (existingRecord != null)
             {
-                FileName = fileName,
-                TableName = tableName,
-                ErrorDetails = errorJson,
-                LoggedDate = DateTime.UtcNow
-            };
+                // Append new errors to existing
+                var existingErrors = JsonSerializer.Deserialize<List<object>>(existingRecord.ErrorDetails) ?? new List<object>();
+                existingErrors.AddRange(tableErrors);
 
-            const string insertQuery = @"
-                INSERT INTO ErrorRecords (FileName, TableName, ErrorDetails, LoggedDate)
-                VALUES (@FileName, @TableName, @ErrorDetails, @LoggedDate);";
+                string updatedJson = JsonSerializer.Serialize(existingErrors);
 
-            await connection.ExecuteAsync(insertQuery, errorRecord);
+                await connection.ExecuteAsync(@"
+                    UPDATE ErrorRecords 
+                    SET ErrorDetails = @ErrorDetails, LoggedDate = @LoggedDate
+                    WHERE FileName = @FileName AND TableName = @TableName",
+                    new { FileName = fileName, TableName = tableName, ErrorDetails = updatedJson, LoggedDate = DateTime.UtcNow });
+            }
+            else
+            {
+                // Insert new record
+                var errorRecord = new ErrorRecord
+                {
+                    FileName = fileName,
+                    TableName = tableName,
+                    ErrorDetails = errorJson,
+                    LoggedDate = DateTime.UtcNow
+                };
+
+                await connection.ExecuteAsync(@"
+                    INSERT INTO ErrorRecords (FileName, TableName, ErrorDetails, LoggedDate)
+                    VALUES (@FileName, @TableName, @ErrorDetails, @LoggedDate)", errorRecord);
+            }
         }
 
         // ✅ Helper: Check sheet existence
