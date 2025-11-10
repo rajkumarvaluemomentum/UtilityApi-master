@@ -2,6 +2,7 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
 using System.Text.Json;
+using UtilityApi.Models;
 
 namespace UtilityApi.Endpoints
 {
@@ -14,8 +15,8 @@ namespace UtilityApi.Endpoints
                 if (file == null || file.Length == 0)
                     return Results.BadRequest("Please upload a valid Excel file.");
 
-                var errorSummary = new List<object>();
                 string fileName = file.FileName;
+                var allErrors = new List<object>();
 
                 using var stream = new MemoryStream();
                 await file.CopyToAsync(stream);
@@ -26,6 +27,9 @@ namespace UtilityApi.Endpoints
                 // ✅ Process Customers
                 if (TryGetSheet(workbook, "Customers", out var customerSheet))
                 {
+                    string currentTable = "Customers";
+                    var tableErrors = new List<object>();
+
                     int rowNumber = 1;
                     foreach (var row in customerSheet.RowsUsed().Skip(1))
                     {
@@ -47,25 +51,39 @@ namespace UtilityApi.Endpoints
 
                         if (!string.IsNullOrEmpty(missingFields))
                         {
-                            await LogError(connection, fileName, "Customers", rowNumber, c, $"Missing required field(s): {missingFields}");
-                            errorSummary.Add(new { Table = "Customers", Row = rowNumber, Error = missingFields });
+                            tableErrors.Add(new { Row = rowNumber, Error = $"Missing required field(s): {missingFields}" });
                             continue;
                         }
 
-                        var exists = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM Customers WHERE CustomerId = @CustomerId", new { c.CustomerId });
+                        try
+                        {
+                            var exists = await connection.ExecuteScalarAsync<int>(
+                                "SELECT COUNT(1) FROM Customers WHERE CustomerId = @CustomerId", new { c.CustomerId });
 
-                        if (exists > 0)
-                            continue;
-
-                        await connection.ExecuteAsync(
-                            "INSERT INTO Customers (CustomerId, Name, Email, Phone) VALUES (@CustomerId, @Name, @Email, @Phone)", c);
+                            if (exists == 0)
+                            {
+                                await connection.ExecuteAsync(
+                                    "INSERT INTO Customers (CustomerId, Name, Email, Phone) VALUES (@CustomerId, @Name, @Email, @Phone)", c);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            tableErrors.Add(new { Row = rowNumber, Error = ex.Message });
+                        }
                     }
+
+                    // ✅ Log to DB if any errors
+                    if (tableErrors.Any())
+                        await LogError(connection, fileName, currentTable, tableErrors);
+                    allErrors.AddRange(tableErrors);
                 }
 
                 // ✅ Process Products
                 if (TryGetSheet(workbook, "Products", out var productSheet))
                 {
+                    string currentTable = "Products";
+                    var tableErrors = new List<object>();
+
                     int rowNumber = 1;
                     foreach (var row in productSheet.RowsUsed().Skip(1))
                     {
@@ -87,25 +105,38 @@ namespace UtilityApi.Endpoints
 
                         if (!string.IsNullOrEmpty(missingFields))
                         {
-                            await LogError(connection, fileName, "Products", rowNumber, p, $"Missing required field(s): {missingFields}");
-                            errorSummary.Add(new { Table = "Products", Row = rowNumber, Error = missingFields });
+                            tableErrors.Add(new { Row = rowNumber, Error = $"Missing required field(s): {missingFields}" });
                             continue;
                         }
 
-                        var exists = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM Products WHERE ProductId = @ProductId", new { p.ProductId });
+                        try
+                        {
+                            var exists = await connection.ExecuteScalarAsync<int>(
+                                "SELECT COUNT(1) FROM Products WHERE ProductId = @ProductId", new { p.ProductId });
 
-                        if (exists > 0)
-                            continue;
-
-                        await connection.ExecuteAsync(
-                            "INSERT INTO Products (ProductId, ProductName, Category, Price) VALUES (@ProductId, @ProductName, @Category, @Price)", p);
+                            if (exists == 0)
+                            {
+                                await connection.ExecuteAsync(
+                                    "INSERT INTO Products (ProductId, ProductName, Category, Price) VALUES (@ProductId, @ProductName, @Category, @Price)", p);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            tableErrors.Add(new { Row = rowNumber, Error = ex.Message });
+                        }
                     }
+
+                    if (tableErrors.Any())
+                        await LogError(connection, fileName, currentTable, tableErrors);
+                    allErrors.AddRange(tableErrors);
                 }
 
                 // ✅ Process Sales
                 if (TryGetSheet(workbook, "Sales", out var salesSheet))
                 {
+                    string currentTable = "Sales";
+                    var tableErrors = new List<object>();
+
                     int rowNumber = 1;
                     foreach (var row in salesSheet.RowsUsed().Skip(1))
                     {
@@ -129,48 +160,55 @@ namespace UtilityApi.Endpoints
 
                         if (!string.IsNullOrEmpty(missingFields))
                         {
-                            await LogError(connection, fileName, "Sales", rowNumber, s, $"Missing required field(s): {missingFields}");
-                            errorSummary.Add(new { Table = "Sales", Row = rowNumber, Error = missingFields });
+                            tableErrors.Add(new { Row = rowNumber, Error = $"Missing required field(s): {missingFields}" });
                             continue;
                         }
-
-                        var validCustomer = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM Customers WHERE CustomerId = @CustomerId", new { s.CustomerId });
-                        var validProduct = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM Products WHERE ProductId = @ProductId", new { s.ProductId });
-
-                        if (validCustomer == 0 || validProduct == 0)
-                        {
-                            // await LogError(connection, fileName, "Sales", rowNumber, s, "Invalid foreign key reference (Customer or Product missing).");
-                            // errorSummary.Add(new { Table = "Sales", Row = rowNumber, Error = "Invalid foreign key reference" });
-                            continue;
-                        }
-
-                        var exists = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM Sales WHERE SaleId = @SaleId", new { s.SaleId });
-
-                        if (exists > 0)
-                            continue;
 
                         try
                         {
-                            await connection.ExecuteAsync(
-                                "INSERT INTO Sales (SaleId, CustomerId, ProductId, Quantity, Total) VALUES (@SaleId, @CustomerId, @ProductId, @Quantity, @Total)", s);
+                            var validCustomer = await connection.ExecuteScalarAsync<int>(
+                                "SELECT COUNT(1) FROM Customers WHERE CustomerId = @CustomerId", new { s.CustomerId });
+                            var validProduct = await connection.ExecuteScalarAsync<int>(
+                                "SELECT COUNT(1) FROM Products WHERE ProductId = @ProductId", new { s.ProductId });
+
+                            if (validCustomer == 0 || validProduct == 0)
+                            {
+                                tableErrors.Add(new { Row = rowNumber, Error = "The referenced Customer or Product does not exist." });
+                                continue;
+                            }
+
+                            var exists = await connection.ExecuteScalarAsync<int>(
+                                "SELECT COUNT(1) FROM Sales WHERE SaleId = @SaleId", new { s.SaleId });
+
+                            if (exists == 0)
+                            {
+                                await connection.ExecuteAsync(
+                                    "INSERT INTO Sales (SaleId, CustomerId, ProductId, Quantity, Total) VALUES (@SaleId, @CustomerId, @ProductId, @Quantity, @Total)", s);
+                            }
                         }
-                        catch (SqlException ex)
+                        catch (Exception ex)
                         {
-                            await LogError(connection, fileName, "Sales", rowNumber, s, $"SQL Error: {ex.Message}");
-                            errorSummary.Add(new { Table = "Sales", Row = rowNumber, Error = ex.Message });
+                            tableErrors.Add(new { Row = rowNumber, Error = ex.Message });
                         }
                     }
+
+                    if (tableErrors.Any())
+                        await LogError(connection, fileName, currentTable, tableErrors);
+                    allErrors.AddRange(tableErrors);
                 }
 
+                // ✅ Final Response
                 return Results.Json(new
                 {
-                    Message = "Excel data processed successfully",
-                    File = fileName,
-                    ErrorsLogged = errorSummary.Count,
-                    ErrorDetails = errorSummary
+                    statusCode = 200,
+                    success = true,
+                    message = "Excel data processed successfully.",
+                    data = new
+                    {
+                        file = fileName,
+                        totalErrors = allErrors.Count,
+                        errorDetails = allErrors
+                    }
                 });
             })
             .DisableAntiforgery()
@@ -179,12 +217,34 @@ namespace UtilityApi.Endpoints
             .WithSummary("Upload Excel Data Into Database");
         }
 
+        // ✅ Helper: Insert error record
+        private static async Task LogError(SqlConnection connection, string fileName, string tableName, List<object> tableErrors)
+        {
+            string errorJson = JsonSerializer.Serialize(tableErrors);
+
+            var errorRecord = new ErrorRecord
+            {
+                FileName = fileName,
+                TableName = tableName,
+                ErrorDetails = errorJson,
+                LoggedDate = DateTime.UtcNow
+            };
+
+            const string insertQuery = @"
+                INSERT INTO ErrorRecords (FileName, TableName, ErrorDetails, LoggedDate)
+                VALUES (@FileName, @TableName, @ErrorDetails, @LoggedDate);";
+
+            await connection.ExecuteAsync(insertQuery, errorRecord);
+        }
+
+        // ✅ Helper: Check sheet existence
         private static bool TryGetSheet(XLWorkbook workbook, string name, out IXLWorksheet sheet)
         {
             sheet = workbook.Worksheets.FirstOrDefault(w => w.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             return sheet != null;
         }
 
+        // ✅ Helper: Detect missing fields
         private static string GetMissingFields(params (string FieldName, object? Value)[] fields)
         {
             var missing = fields
@@ -194,38 +254,5 @@ namespace UtilityApi.Endpoints
 
             return missing.Count > 0 ? string.Join(", ", missing) : string.Empty;
         }
-        // ✅ Log Error only if it doesn't already exist
-        private static async Task LogError(SqlConnection connection, string fileName, string tableName, int rowNumber, object rowData, string errorMessage)
-        {
-            string jsonData = JsonSerializer.Serialize(new
-            {
-                ErrorDetails = errorMessage,
-                RowData = rowData
-            }, new JsonSerializerOptions { WriteIndented = true });
-
-            // Check if this exact error already exists
-            var exists = await connection.ExecuteScalarAsync<int>(
-                @"SELECT COUNT(1)
-          FROM ErrorRecords
-          WHERE FileName = @FileName AND TableName = @TableName AND RowNumber = @RowNumber",
-                new { FileName = fileName, TableName = tableName, RowNumber = rowNumber });
-
-            if (exists == 0)
-            {
-                await connection.ExecuteAsync(
-                    @"INSERT INTO ErrorRecords (FileName, TableName, RowNumber, ErrorDetails, LoggedDate)
-              VALUES (@FileName, @TableName, @RowNumber, @ErrorDetails, GETDATE())",
-                    new
-                    {
-                        FileName = fileName,
-                        TableName = tableName,
-                        RowNumber = rowNumber,
-                        ErrorDetails = jsonData
-                    });
-            }
-        }
-
-
     }
-
 }
