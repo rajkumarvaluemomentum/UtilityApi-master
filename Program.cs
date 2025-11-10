@@ -5,6 +5,8 @@ var builder = WebApplication.CreateBuilder(args);
 // ✅ Add Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddHostedService<UtilityApi.Services.DataCleanupService>();
+
 
 var app = builder.Build();
 
@@ -28,7 +30,6 @@ app.MapExcelUploadEndpoints(connString);
 app.MapErrorRecordEndpoints(connString);
 // ✅ Map the Excel endpoint
 app.MapExcelGeneratorEndpoints();
-
-
+app.MapDataCleanupEndpoints(connString);
 
 app.Run();
